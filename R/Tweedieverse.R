@@ -47,6 +47,8 @@
 #' If not found in metadata, defaults to the sample-wise total sums, unless \code{adjust_offset = FALSE}.
 #' @param max_significance The q-value threshold for significance. Default is 0.05.
 #' @param correction The correction method for computing the q-value (see \code{\link[stats]{p.adjust}} for options, default is 'BH').
+#' @param median_comparison If TRUE(default), coefficients will be tested against a null value corresponding to the median coefficient for a covariate in the \code{metadata}. Should only be used for relative abundance data.
+#' @param median_subtraction If TRUE, coefficients minus median will be used for compositionality adjustment. 
 #' @param standardize Should continuous metadata be standardized? Default is TRUE. Bypassed for categorical variables.
 #' @param cores An integer that indicates the number of R processes to run in parallel. Default is 1.
 #' @param optimizer The optimization routine to be used for estimating the parameters of the Tweedie model.
@@ -254,6 +256,8 @@
 #' base_model = 'CPLM',
 #' adjust_offset = FALSE, # No offset as the values are relative abundances
 #' cores = 8, # Make sure your computer has the capability
+#' median_comparison = TRUE,
+#' median_subtraction = TRUE,
 #' standardize = FALSE,
 #' reference = c('diagnosis,nonIBD'))
 #'
@@ -278,6 +282,8 @@ Tweedieverse <- function(input_features,
                          scale_factor = NULL,
                          max_significance = 0.05,
                          correction = "BH",
+                         median_comparison = TRUE,
+                         median_subtraction = FALSE,
                          standardize = TRUE,
                          cores = 1,
                          optimizer = "nlminb",
@@ -941,6 +947,29 @@ Tweedieverse <- function(input_features,
     fit_data$results[order(fit_data$results$qval),]
   ordered_results <-
     ordered_results[!is.na(ordered_results$qval),] # Remove NA's
+  
+  if (median_comparison) {
+
+    mc_input <- ordered_results %>%
+      dplyr::rename(taxon = feature,
+                    effect_size = coef)
+    
+    mc_out <- median_comparison_tweedie(mc_input,
+                                        p_cutoff = 0.95,  # ignore p≥0.95
+                                        subtract_median = median_subtraction,
+                                        n_sims = 10000,
+                                        median_threshold = 0)
+    
+    ## Replace the classical columns with median‑based ones
+    ordered_results$coef <- mc_out$coef_median
+    ordered_results$pval <- mc_out$pval_median
+    ordered_results$qval <- p.adjust(mc_out$pval_median,
+                                     method = correction)
+    
+    ordered_results <- ordered_results[order(ordered_results$qval),]
+    rownames(ordered_results) <- NULL 
+  }
+  
   ordered_results <-
     dplyr::select(
       ordered_results,
@@ -955,6 +984,7 @@ Tweedieverse <- function(input_features,
       ),
       everything()
     )
+  
   write.table(
     ordered_results,
     file = results_file,
